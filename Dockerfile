@@ -137,6 +137,17 @@ RUN micromamba create -y -n p21_main --override-channels -c conda-forge -c bioco
         r-biocmanager \
     && micromamba clean -a -y
 
+# Bioconductor data packages download their payload in a conda post-link script,
+# which can fail silently. Re-install any that are missing from Bioconductor 3.14.
+RUN /opt/micromamba/envs/p21_main/bin/Rscript -e ' \
+      need <- c("GenomeInfoDbData","GO.db","DO.db","org.Mm.eg.db"); \
+      have <- function(p) suppressPackageStartupMessages(requireNamespace(p, quietly = TRUE)); \
+      miss <- need[!sapply(need, have)]; \
+      cat("Missing data packages:", if (length(miss)) miss else "none", "\n"); \
+      if (length(miss)) BiocManager::install(miss, version = "3.14", update = FALSE, ask = FALSE, force = TRUE); \
+      still <- need[!sapply(need, have)]; \
+      if (length(still)) stop("Still missing after BiocManager: ", paste(still, collapse = ", "))'
+
 # clusterProfiler 4.2.0 -> 4.2.2 (patch release used in the paper; pure R, same dependencies)
 RUN cd /tmp \
     && ( wget -q https://bioconductor.org/packages/3.14/bioc/src/contrib/clusterProfiler_4.2.2.tar.gz \
@@ -156,6 +167,12 @@ RUN micromamba create -y -n p21_dbl --override-channels -c conda-forge -c biocon
         r-irkernel \
     && micromamba clean -a -y
 
+RUN /opt/micromamba/envs/p21_dbl/bin/Rscript -e ' \
+      if (!requireNamespace("GenomeInfoDbData", quietly = TRUE)) { \
+        if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager", repos = "https://cloud.r-project.org"); \
+        BiocManager::install("GenomeInfoDbData", version = "3.18", update = FALSE, ask = FALSE, force = TRUE) }; \
+      stopifnot(requireNamespace("GenomeInfoDbData", quietly = TRUE))'
+
 # ---- Isolate each env: ignore R_LIBS_USER / shared libraries on the hub ----
 RUN for e in p21_main p21_dbl; do \
       echo '.libPaths(.Library)' >> /opt/micromamba/envs/$e/lib/R/etc/Rprofile.site; \
@@ -166,13 +183,15 @@ RUN /opt/micromamba/envs/p21_main/bin/Rscript -e ' \
       pk <- c("Seurat","SeuratObject","sctransform","edgeR","limma","clusterProfiler","fgsea", \
               "AUCell","scuttle","SingleCellExperiment","SummarizedExperiment","org.Mm.eg.db", \
               "affy","dplyr","tidyr","patchwork","ggplot2","RColorBrewer","viridis","ggalluvial","Matrix"); \
-      ok <- sapply(pk, function(p) suppressPackageStartupMessages(requireNamespace(p, quietly = TRUE))); \
+      ok <- sapply(pk, function(p) tryCatch({ suppressPackageStartupMessages(loadNamespace(p)); TRUE }, \
+              error = function(e) { message("LOAD ERROR ", p, ": ", conditionMessage(e)); FALSE })); \
       if (!all(ok)) stop("Failed to load: ", paste(pk[!ok], collapse = ", ")); \
       v <- sapply(pk, function(p) as.character(packageVersion(p))); \
       writeLines(c(R.version.string, paste(pk, v, sep = "\t")), "/opt/p21/versions_p21_main.txt")' \
     && /opt/micromamba/envs/p21_dbl/bin/Rscript -e ' \
       pk <- c("scDblFinder","SingleCellExperiment","xgboost","Matrix"); \
-      ok <- sapply(pk, function(p) suppressPackageStartupMessages(requireNamespace(p, quietly = TRUE))); \
+      ok <- sapply(pk, function(p) tryCatch({ suppressPackageStartupMessages(loadNamespace(p)); TRUE }, \
+              error = function(e) { message("LOAD ERROR ", p, ": ", conditionMessage(e)); FALSE })); \
       if (!all(ok)) stop("Failed to load: ", paste(pk[!ok], collapse = ", ")); \
       v <- sapply(pk, function(p) as.character(packageVersion(p))); \
       writeLines(c(R.version.string, paste(pk, v, sep = "\t")), "/opt/p21/versions_p21_dbl.txt")' \
