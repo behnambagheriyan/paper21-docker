@@ -111,6 +111,10 @@ RUN mkdir -p /tmp/mm /opt/micromamba /opt/p21 \
     && mv /tmp/mm/bin/micromamba /usr/local/bin/micromamba \
     && rm -rf /tmp/mm
 
+# Each env gets `.libPaths(.Library)` in its Rprofile.site right after creation, so R uses
+# ONLY the env's own library (ignores R_LIBS / R_LIBS_USER set by the base image or the hub)
+# and every later install lands inside the env.
+
 # ---- Env 1: main analysis (R 4.1.3, Bioconductor 3.14) ----
 RUN micromamba create -y -n p21_main --override-channels -c conda-forge -c bioconda \
         r-base=4.1.3 \
@@ -135,16 +139,18 @@ RUN micromamba create -y -n p21_main --override-channels -c conda-forge -c bioco
         r-irkernel \
         r-remotes \
         r-biocmanager \
-    && micromamba clean -a -y
+    && micromamba clean -a -y \
+    && echo '.libPaths(.Library)' >> /opt/micromamba/envs/p21_main/lib/R/etc/Rprofile.site
 
 # Bioconductor data packages download their payload in a conda post-link script,
 # which can fail silently. Re-install any that are missing from Bioconductor 3.14.
 RUN /opt/micromamba/envs/p21_main/bin/Rscript -e ' \
+      cat("libPaths:", .libPaths(), "\n"); \
       need <- c("GenomeInfoDbData","GO.db","DO.db","org.Mm.eg.db"); \
       have <- function(p) suppressPackageStartupMessages(requireNamespace(p, quietly = TRUE)); \
       miss <- need[!sapply(need, have)]; \
       cat("Missing data packages:", if (length(miss)) miss else "none", "\n"); \
-      if (length(miss)) BiocManager::install(miss, version = "3.14", update = FALSE, ask = FALSE, force = TRUE); \
+      if (length(miss)) BiocManager::install(miss, version = "3.14", lib = .Library, update = FALSE, ask = FALSE, force = TRUE); \
       still <- need[!sapply(need, have)]; \
       if (length(still)) stop("Still missing after BiocManager: ", paste(still, collapse = ", "))'
 
@@ -152,7 +158,7 @@ RUN /opt/micromamba/envs/p21_main/bin/Rscript -e ' \
 RUN cd /tmp \
     && ( wget -q https://bioconductor.org/packages/3.14/bioc/src/contrib/clusterProfiler_4.2.2.tar.gz \
          || wget -q https://bioconductor.org/packages/3.14/bioc/src/contrib/Archive/clusterProfiler/clusterProfiler_4.2.2.tar.gz ) \
-    && /opt/micromamba/envs/p21_main/bin/R CMD INSTALL clusterProfiler_4.2.2.tar.gz \
+    && /opt/micromamba/envs/p21_main/bin/R CMD INSTALL -l /opt/micromamba/envs/p21_main/lib/R/library clusterProfiler_4.2.2.tar.gz \
     && rm -f clusterProfiler_4.2.2.tar.gz \
     || echo "WARNING: clusterProfiler 4.2.2 could not be installed - keeping 4.2.0 (record this in the report)"
 
@@ -165,18 +171,15 @@ RUN micromamba create -y -n p21_dbl --override-channels -c conda-forge -c biocon
         bioconductor-singlecellexperiment \
         r-matrix \
         r-irkernel \
-    && micromamba clean -a -y
+    && micromamba clean -a -y \
+    && echo '.libPaths(.Library)' >> /opt/micromamba/envs/p21_dbl/lib/R/etc/Rprofile.site
 
 RUN /opt/micromamba/envs/p21_dbl/bin/Rscript -e ' \
       if (!requireNamespace("GenomeInfoDbData", quietly = TRUE)) { \
-        if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager", repos = "https://cloud.r-project.org"); \
-        BiocManager::install("GenomeInfoDbData", version = "3.18", update = FALSE, ask = FALSE, force = TRUE) }; \
+        if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager", lib = .Library, repos = "https://cloud.r-project.org"); \
+        BiocManager::install("GenomeInfoDbData", version = "3.18", lib = .Library, update = FALSE, ask = FALSE, force = TRUE) }; \
       stopifnot(requireNamespace("GenomeInfoDbData", quietly = TRUE))'
 
-# ---- Isolate each env: ignore R_LIBS_USER / shared libraries on the hub ----
-RUN for e in p21_main p21_dbl; do \
-      echo '.libPaths(.Library)' >> /opt/micromamba/envs/$e/lib/R/etc/Rprofile.site; \
-    done
 
 # ---- Build-time check: fail the build if any package does not load ----
 RUN /opt/micromamba/envs/p21_main/bin/Rscript -e ' \
