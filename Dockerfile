@@ -145,11 +145,11 @@ RUN micromamba create -y -n p21_main --override-channels -c conda-forge -c bioco
 # Bioconductor data packages download their payload in a conda post-link script,
 # which can fail silently. Re-install any that are missing from Bioconductor 3.14.
 RUN /opt/micromamba/envs/p21_main/bin/Rscript -e ' \
-      cat("libPaths:", .libPaths(), "\n"); \
+      message("libPaths: ", paste(.libPaths(), collapse = " ")); \
       need <- c("GenomeInfoDbData","GO.db","DO.db","org.Mm.eg.db"); \
       have <- function(p) suppressPackageStartupMessages(requireNamespace(p, quietly = TRUE)); \
       miss <- need[!sapply(need, have)]; \
-      cat("Missing data packages:", if (length(miss)) miss else "none", "\n"); \
+      message("Missing data packages: ", if (length(miss)) paste(miss, collapse = " ") else "none"); \
       if (length(miss)) BiocManager::install(miss, version = "3.14", lib = .Library, update = FALSE, ask = FALSE, force = TRUE); \
       still <- need[!sapply(need, have)]; \
       if (length(still)) stop("Still missing after BiocManager: ", paste(still, collapse = ", "))'
@@ -182,6 +182,7 @@ RUN /opt/micromamba/envs/p21_dbl/bin/Rscript -e ' \
 
 
 # ---- Build-time check: fail the build if any package does not load ----
+# (no backslash escapes inside Rscript -e: R's launcher script would split the argument)
 RUN /opt/micromamba/envs/p21_main/bin/Rscript -e ' \
       pk <- c("Seurat","SeuratObject","sctransform","edgeR","limma","clusterProfiler","fgsea", \
               "AUCell","scuttle","SingleCellExperiment","SummarizedExperiment","org.Mm.eg.db", \
@@ -190,14 +191,14 @@ RUN /opt/micromamba/envs/p21_main/bin/Rscript -e ' \
               error = function(e) { message("LOAD ERROR ", p, ": ", conditionMessage(e)); FALSE })); \
       if (!all(ok)) stop("Failed to load: ", paste(pk[!ok], collapse = ", ")); \
       v <- sapply(pk, function(p) as.character(packageVersion(p))); \
-      writeLines(c(R.version.string, paste(pk, v, sep = "\t")), "/opt/p21/versions_p21_main.txt")' \
+      writeLines(c(R.version.string, paste(pk, v, sep = " ")), "/opt/p21/versions_p21_main.txt")' \
     && /opt/micromamba/envs/p21_dbl/bin/Rscript -e ' \
       pk <- c("scDblFinder","SingleCellExperiment","xgboost","Matrix"); \
       ok <- sapply(pk, function(p) tryCatch({ suppressPackageStartupMessages(loadNamespace(p)); TRUE }, \
               error = function(e) { message("LOAD ERROR ", p, ": ", conditionMessage(e)); FALSE })); \
       if (!all(ok)) stop("Failed to load: ", paste(pk[!ok], collapse = ", ")); \
       v <- sapply(pk, function(p) as.character(packageVersion(p))); \
-      writeLines(c(R.version.string, paste(pk, v, sep = "\t")), "/opt/p21/versions_p21_dbl.txt")' \
+      writeLines(c(R.version.string, paste(pk, v, sep = " ")), "/opt/p21/versions_p21_dbl.txt")' \
     && cat /opt/p21/versions_*.txt
 
 # ---- Exact lock files (record of every installed package, for the report) ----
